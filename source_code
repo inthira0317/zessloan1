@@ -1,0 +1,734 @@
+*****************************************************************************************************************
+*----------------------------------------------------------------------*
+*&* Program Name         : ZESSLOAN1
+* Object ID              :
+* Functional Analyst     :  INTHIRA PRIYATHARSHINI
+* Programmer             :  INTHIRA PRIYATHARSHINI
+* Start Date             :  25.09.2026
+* Initial Transport No   :
+* Description            : Employee Loan Balance and Interest Calculation
+*----------------------------------------------------------------------*
+* Includes               : None
+* Function Modules       : HR_GET_LOAN_BAL_PAID_AMT
+*                          PCLO_BUILD_REPAYMENT_PLAN
+*                          RE_ADD_MONTH_TO_DATE
+*                          HR_READ_INFOTYPE
+* Logical Database       : None
+* Transaction Code       : ZESSLOAN1
+* External References    : None
+*   *  '5300'                    " hba Non executive loan
+*      '5301'                    " hba Non executive loan interest
+*      '5302'                    " hba  executive loan
+*      '5303'                    " hba  executive loan interest
+*      '5304'                    " CAR LOAN
+*      '5305'                    " New car loan interest
+*      '5306'                    " Scooter loan
+*      '5307'                    " New Scooter interest
+*      '5308'                    " Multipurpose loan
+*      '5309'                    " Multipurpose interest
+*      '5310'                    " Festival Loan interest
+*----------------------------------------------------------------------*
+****************************************************************************************************************
+REPORT zessloan1.
+*---------------------------------------------------------------------*
+* SELECTION SCREEN
+*---------------------------------------------------------------------*
+
+PARAMETERS:
+  p_pernr TYPE pernr_d OBLIGATORY,
+  p_subty TYPE subty OBLIGATORY.
+
+*DATA:
+*  gv_pernr TYPE pa0045-pernr,
+*  gv_subty TYPE pa0045-subty.
+*
+*SELECT-OPTIONS:
+*  s_pernr FOR gv_pernr,
+*  s_subty FOR gv_subty.
+
+*---------------------------------------------------------------------*
+* CONSTANTS
+*---------------------------------------------------------------------*
+
+CONSTANTS:
+  gc_open_date TYPE datum VALUE '20230401',   " loan from 01.04.2023 onwards
+  gc_transfer  TYPE massn VALUE 'ZX'. " inter company transfer
+
+*---------------------------------------------------------------------*
+* TYPES
+*---------------------------------------------------------------------*
+
+TYPES:
+  ty_amount TYPE p LENGTH 16 DECIMALS 2.
+
+TYPES:
+  BEGIN OF ty_output,
+    pernr    TYPE pa0045-pernr, " personnal number
+    subty    TYPE pa0045-subty, " loan type
+    objps    TYPE pa0045-objps, " sequence number
+    datbw    TYPE pa0045-datbw, " Approval date
+    darbt    TYPE pa0045-darbt, " Loan amount granted
+    opelo    TYPE q0045-opelo, " loan balnce
+    accinr   TYPE ty_amount, " accrued interest
+    open_int TYPE ty_amount, " opening interest
+    total    TYPE ty_amount,  " total interest
+  END OF ty_output.
+
+*---------------------------------------------------------------------*
+* DATA DECLARATIONS
+*---------------------------------------------------------------------*
+
+DATA:
+  gt_pa0045 TYPE TABLE OF pa0045,
+  gt_output TYPE TABLE OF ty_output.
+
+DATA:
+  gs_pa0045 TYPE pa0045,
+  gs_output TYPE ty_output.
+
+DATA:
+  gv_balance       TYPE q0045-opelo,
+  gv_interest      TYPE ty_amount,
+  gv_open_interest TYPE ty_amount,
+  gv_lgart         TYPE lgart,
+  gv_lgart2        TYPE lgart.
+
+DATA:
+  gr_alv TYPE REF TO cl_salv_table.
+
+*---------------------------------------------------------------------*
+* START OF SELECTION
+*---------------------------------------------------------------------*
+
+START-OF-SELECTION.
+
+  PERFORM get_loan_details.
+
+  IF gt_output IS INITIAL.
+    MESSAGE 'No loan details found'
+      TYPE 'S' DISPLAY LIKE 'E'.
+    RETURN.
+  ENDIF.
+
+  PERFORM display_alv.
+
+*---------------------------------------------------------------------*
+* FORM GET_LOAN_DETAILS
+*---------------------------------------------------------------------*
+
+FORM get_loan_details.
+
+  CLEAR:
+    gt_pa0045,
+    gt_output.
+
+*---------------------------------------------------------------------*
+* GET ACTIVE LOAN DETAILS
+*---------------------------------------------------------------------*
+
+
+  IF p_subty = '5300'.
+
+    SELECT *
+      FROM pa0045
+      INTO TABLE gt_pa0045
+      WHERE pernr = p_pernr
+        AND begda <= sy-datum
+        AND endda >= sy-datum
+        AND ( subty = '5300'                    " HBA - Non executive loan
+           OR subty = '5301'
+           OR subty = '5302'
+           OR subty = '5303' ).
+
+  ELSEif p_subty = '5304'.
+
+    SELECT *
+      FROM pa0045
+      INTO TABLE gt_pa0045
+      WHERE pernr = p_pernr
+        AND begda <= sy-datum
+        AND endda >= sy-datum
+        AND  ( subty = '5304'                   " CAR LOAN
+           OR subty = '5305' ).
+
+                     " New car loan interest ).
+
+                      " Festival Loan interest
+
+        ELSEif p_subty = '5306'.
+
+    SELECT *
+      FROM pa0045
+      INTO TABLE gt_pa0045
+      WHERE pernr = p_pernr
+        AND begda <= sy-datum
+        AND endda >= sy-datum
+        AND  ( subty = '5306'                   " CAR LOAN
+           OR subty = '5307' ).
+
+       ELSEif p_subty = '5308'.
+
+    SELECT *
+      FROM pa0045
+      INTO TABLE gt_pa0045
+      WHERE pernr = p_pernr
+        AND begda <= sy-datum
+        AND endda >= sy-datum
+        AND  ( subty = '5308 '   OR subty = '5309'                  " CAR LOAN
+           ).
+
+       ELSEif p_subty = '5310'.
+
+    SELECT *
+      FROM pa0045
+      INTO TABLE gt_pa0045
+      WHERE pernr = p_pernr
+        AND begda <= sy-datum
+        AND endda >= sy-datum
+        AND  ( subty = '5310 '                   " CAR LOAN
+           ).
+
+
+  ENDIF.
+
+  IF gt_pa0045 IS INITIAL.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* PROCESS EACH LOAN
+*---------------------------------------------------------------------*
+
+  LOOP AT gt_pa0045 INTO gs_pa0045.
+
+    CLEAR:
+      gs_output,
+      gv_balance,
+      gv_interest,
+      gv_open_interest.
+
+*---------------------------------------------------------------------*
+* EMPLOYEE AND LOAN DETAILS
+*---------------------------------------------------------------------*
+
+    gs_output-pernr = gs_pa0045-pernr.
+    gs_output-subty = gs_pa0045-subty.
+    gs_output-objps = gs_pa0045-objps.
+
+*---------------------------------------------------------------------*
+* LOAN APPROVED DATE
+*---------------------------------------------------------------------*
+
+    gs_output-datbw = gs_pa0045-datbw.
+
+*---------------------------------------------------------------------*
+* LOAN AMOUNT
+*---------------------------------------------------------------------*
+
+    gs_output-darbt = gs_pa0045-darbt.
+
+*---------------------------------------------------------------------*
+* LOAN BALANCE
+*---------------------------------------------------------------------*
+
+    CALL FUNCTION 'HR_GET_LOAN_BAL_PAID_AMT'
+      EXPORTING
+        pernr     = gs_pa0045-pernr
+        loan_type = gs_pa0045-subty
+        seq_nr    = gs_pa0045-objps
+        begda     = gs_pa0045-begda
+        endda     = gs_pa0045-endda
+      IMPORTING
+        bal_amt   = gv_balance.
+
+    gs_output-opelo = gv_balance.
+
+*---------------------------------------------------------------------*
+* ACCRUED INTEREST
+*---------------------------------------------------------------------*
+
+    PERFORM get_acc_intrest.
+
+    gs_output-accinr = gv_interest.
+
+*---------------------------------------------------------------------*
+* OPENING INTEREST
+*---------------------------------------------------------------------*
+
+    PERFORM get_open_interest.
+
+    gs_output-open_int = gv_open_interest.
+
+*---------------------------------------------------------------------*
+* TOTAL
+*---------------------------------------------------------------------*
+
+    gs_output-total =
+          gs_output-opelo
+        + gs_output-accinr
+        + gs_output-open_int.
+
+*---------------------------------------------------------------------*
+* APPEND OUTPUT
+*---------------------------------------------------------------------*
+
+    APPEND gs_output TO gt_output.
+
+  ENDLOOP.
+
+ENDFORM.
+
+********************************************************************
+
+* GET ACCRUED INTEREST
+
+
+FORM get_acc_intrest.
+
+  DATA:
+    lt_pa0000   TYPE TABLE OF pa0000,
+    ls_pa0000   TYPE pa0000,
+    ls_previous TYPE pa0045,
+    lv_objps    TYPE pa0045-objps,
+    lv_endda    TYPE datum.
+
+  CLEAR gv_interest.
+
+*---------------------------------------------------------------------*
+* CURRENT COMPANY ACCRUED INTEREST
+*---------------------------------------------------------------------*
+
+  PERFORM calculate_loan_interest
+    USING gs_pa0045
+    CHANGING gv_interest.
+
+*---------------------------------------------------------------------*
+* CHECK INTERCOMPANY TRANSFER ACTION ZX
+*---------------------------------------------------------------------*
+
+  SELECT *
+    FROM pa0000
+    INTO TABLE lt_pa0000
+    WHERE pernr = gs_pa0045-pernr
+      AND massn = gc_transfer  " Action type ZX = inter company transfer
+      AND begda <= sy-datum.
+
+  IF lt_pa0000 IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  SORT lt_pa0000 BY begda DESCENDING.
+
+  READ TABLE lt_pa0000 INTO ls_pa0000 INDEX 1.
+
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* PREVIOUS LOAN SEQUENCE NUMBER
+*---------------------------------------------------------------------*
+
+  IF gs_pa0045-objps IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  lv_objps  = gs_pa0045-objps - 1.
+  lv_endda  = gs_pa0045-begda - 1.
+
+
+*---------------------------------------------------------------------*
+* GET PREVIOUS PA0045 RECORD
+*---------------------------------------------------------------------*
+
+  SELECT SINGLE *
+    FROM pa0045
+    INTO ls_previous
+    WHERE pernr = gs_pa0045-pernr
+      AND subty = gs_pa0045-subty
+      AND endda = lv_endda
+      AND objps = lv_objps.
+
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* PREVIOUS COMPANY ACCRUED INTEREST
+*---------------------------------------------------------------------*
+
+  PERFORM calculate_loan_interest
+    USING ls_previous
+    CHANGING gv_interest.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* FORM CALCULATE_LOAN_INTEREST
+*---------------------------------------------------------------------*
+
+FORM calculate_loan_interest
+  USING
+    is_loan TYPE pa0045
+  CHANGING
+    cv_interest TYPE ty_amount.
+
+  DATA:
+    lt_pa0078      TYPE TABLE OF p0078,
+    lt_loan_plan   TYPE pclo_repay_tab,
+    ls_p0045       TYPE p0045,
+    ls_plan        TYPE pclo_repay,
+    lv_balance     TYPE q0045-opelo,
+    lv_match_date  TYPE datum,
+    lv_interest_to TYPE datum,
+    lv_interest    TYPE ty_amount.
+
+  CLEAR:
+    lt_pa0078,
+    lt_loan_plan,
+    ls_p0045,
+    lv_balance,
+    lv_match_date,
+    lv_interest_to,
+    lv_interest.
+
+*---------------------------------------------------------------------*
+* STEP 1: GET CURRENT LOAN BALANCE
+*---------------------------------------------------------------------*
+
+  CALL FUNCTION 'HR_GET_LOAN_BAL_PAID_AMT'
+    EXPORTING
+      pernr     = is_loan-pernr
+      loan_type = is_loan-subty
+      seq_nr    = is_loan-objps
+      begda     = is_loan-begda
+      endda     = is_loan-endda
+    IMPORTING
+      bal_amt   = lv_balance.
+
+*---------------------------------------------------------------------*
+* STEP 2: GET PA0078 REPAYMENT DETAILS
+*---------------------------------------------------------------------*
+
+  SELECT *
+    FROM pa0078
+    INTO CORRESPONDING FIELDS OF TABLE lt_pa0078
+    WHERE pernr = is_loan-pernr
+      AND dlart = is_loan-subty
+      AND objid = is_loan-objps.
+
+*---------------------------------------------------------------------*
+* STEP 3: CONVERT PA0045 TO P0045
+*---------------------------------------------------------------------*
+
+  MOVE-CORRESPONDING is_loan TO ls_p0045.
+
+*---------------------------------------------------------------------*
+* STEP 4: BUILD REPAYMENT PLAN
+*---------------------------------------------------------------------*
+
+  CALL FUNCTION 'PCLO_BUILD_REPAYMENT_PLAN'
+    EXPORTING
+      ps_p0045         = ls_p0045
+      pf_fday          = ls_p0045-begda
+      pf_lday          = ls_p0045-endda
+      pt_paym          = lt_pa0078
+      pf_curr          = 'INR'
+      pf_nodisp        = 'X'
+    IMPORTING
+      pt_plan          = lt_loan_plan
+    EXCEPTIONS
+      err_with_alv     = 1
+      err_curr_conv    = 2
+      no_table_entry   = 3
+      err_in_loan_calc = 4
+      OTHERS           = 5.
+
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* STEP 5: REMOVE INTEREST BEFORE 01.04.2023
+*---------------------------------------------------------------------*
+
+  DELETE lt_loan_plan
+    WHERE begda < gc_open_date.
+
+*---------------------------------------------------------------------*
+* STEP 6: MATCH LOAN BALANCE WITH REPAYMENT PLAN LLB
+*---------------------------------------------------------------------*
+
+  LOOP AT lt_loan_plan INTO ls_plan.
+
+    IF ls_plan-llb = lv_balance.
+
+      lv_match_date = ls_plan-begda.
+
+      EXIT.
+
+    ENDIF.
+
+  ENDLOOP.
+
+  IF lv_match_date IS INITIAL.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* STEP 7: ADD ONE MONTH TO MATCHING DATE
+*---------------------------------------------------------------------*
+
+  CALL FUNCTION 'RE_ADD_MONTH_TO_DATE'
+    EXPORTING
+      months  = '1'
+      olddate = lv_match_date
+    IMPORTING
+      newdate = lv_interest_to.
+
+*---------------------------------------------------------------------*
+* STEP 8: GET LAST DAY OF THE NEXT MONTH
+*---------------------------------------------------------------------*
+
+*  CALL FUNCTION 'LAST_DAY_OF_MONTHS'
+*    EXPORTING
+*      day_in            = lv_interest_to
+*    IMPORTING
+*      last_day_of_month = lv_interest_to
+*    EXCEPTIONS
+*      day_in_no_date    = 1
+*      OTHERS            = 2.
+
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* STEP 9: DO NOT CALCULATE FUTURE INTEREST
+*---------------------------------------------------------------------*
+
+  IF lv_interest_to > sy-datum.
+    lv_interest_to = sy-datum.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* STEP 10: CALCULATE ACCRUED INTEREST
+*---------------------------------------------------------------------*
+
+  CLEAR lv_interest.
+
+  LOOP AT lt_loan_plan INTO ls_plan.
+
+    IF ls_plan-begda <= lv_interest_to
+       AND ls_plan-lid IS NOT INITIAL.
+
+      lv_interest = lv_interest + ls_plan-lid.
+
+    ENDIF.
+
+  ENDLOOP.
+
+*---------------------------------------------------------------------*
+* STEP 11: ADD INTEREST TO FINAL VALUE
+*---------------------------------------------------------------------*
+
+  cv_interest = cv_interest + lv_interest.
+
+ENDFORM.
+
+
+*---------------------------------------------------------------------*
+* FORM GET_OPEN_INTEREST
+*---------------------------------------------------------------------*
+
+FORM get_open_interest.
+
+  DATA:
+    lt_p0015 TYPE TABLE OF p0015,
+    ls_p0015 TYPE p0015.
+
+  CLEAR:
+    gv_open_interest,
+    gv_lgart,
+    gv_lgart2,
+    lt_p0015.
+
+*---------------------------------------------------------------------*
+* MAP LOAN SUBTYPE TO INTEREST WAGE TYPES
+*---------------------------------------------------------------------*
+
+  CASE gs_pa0045-subty.
+
+    WHEN '5300' OR '5302'.
+
+      gv_lgart  = '5301'.
+      gv_lgart2 = '5303'.
+
+    WHEN '5304'.
+
+      gv_lgart = '5305'.
+
+    WHEN '5306'.
+
+      gv_lgart = '5307'.
+
+    WHEN '5308'.
+
+      gv_lgart = '5309'.
+
+    WHEN '5310'.
+
+      gv_lgart = '5310'.
+
+  ENDCASE.
+
+  IF gv_lgart IS INITIAL.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* READ PA0015 USING HR_READ_INFOTYPE
+*---------------------------------------------------------------------*
+
+  CALL FUNCTION 'HR_READ_INFOTYPE'
+    EXPORTING
+      pernr           = gs_pa0045-pernr
+      infty           = '0015'
+      begda           = gs_pa0045-begda
+      endda           = gs_pa0045-endda
+    TABLES
+      infty_tab       = lt_p0015
+    EXCEPTIONS
+      infty_not_found = 1
+      invalid_input   = 2
+      OTHERS          = 3.
+
+  IF sy-subrc <> 0.
+    RETURN.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* FILTER INTEREST WAGE TYPES
+*---------------------------------------------------------------------*
+
+  DELETE lt_p0015
+    WHERE subty <> gv_lgart
+      AND subty <> gv_lgart2.
+
+*---------------------------------------------------------------------*
+* SUM OPENING INTEREST
+*---------------------------------------------------------------------*
+
+  LOOP AT lt_p0015 INTO ls_p0015.
+
+    gv_open_interest =
+      gv_open_interest + ls_p0015-betrg.
+
+  ENDLOOP.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* FORM DISPLAY_ALV
+*---------------------------------------------------------------------*
+
+FORM display_alv.
+
+  DATA:
+    lo_columns TYPE REF TO cl_salv_columns_table,
+    lo_column  TYPE REF TO cl_salv_column_table.
+
+  TRY.
+
+      cl_salv_table=>factory(
+        IMPORTING
+          r_salv_table = gr_alv
+        CHANGING
+*
+          t_table      = gt_output ).
+
+
+*---------------------------------------------------------------------*
+* OPTIMIZE COLUMNS
+*---------------------------------------------------------------------*
+
+      lo_columns = gr_alv->get_columns( ).
+
+      lo_columns->set_optimize( abap_true ).
+
+*---------------------------------------------------------------------*
+* ENABLE ALV FUNCTIONS
+*---------------------------------------------------------------------*
+
+      gr_alv->get_functions( )->set_all( abap_true ).
+
+*---------------------------------------------------------------------*
+* SET COLUMN HEADINGS
+*---------------------------------------------------------------------*
+
+      TRY.
+
+          lo_column ?= lo_columns->get_column( 'PERNR' ).
+          lo_column->set_short_text( 'PERNR' ).
+          lo_column->set_medium_text( 'Employee No' ).
+          lo_column->set_long_text( 'Employee Number' ).
+
+          lo_column ?= lo_columns->get_column( 'SUBTY' ).
+          lo_column->set_short_text( 'Subtype' ).
+          lo_column->set_medium_text( 'Loan Subtype' ).
+          lo_column->set_long_text( 'Loan Subtype' ).
+
+          lo_column ?= lo_columns->get_column( 'OBJPS' ).
+          lo_column->set_short_text( 'Sequence' ).
+          lo_column->set_medium_text( 'Sequence No' ).
+          lo_column->set_long_text( 'Loan Sequence Number' ).
+
+          lo_column ?= lo_columns->get_column( 'DATBW' ).
+          lo_column->set_short_text( 'Approved' ).
+          lo_column->set_medium_text( 'Approved Date' ).
+          lo_column->set_long_text( 'Loan Approved Date' ).
+
+          lo_column ?= lo_columns->get_column( 'DARBT' ).
+          lo_column->set_short_text( 'Loan Amt' ).
+          lo_column->set_medium_text( 'Loan Amount' ).
+          lo_column->set_long_text( 'Loan Amount' ).
+
+          lo_column ?= lo_columns->get_column( 'OPELO' ).
+          lo_column->set_short_text( 'Balance' ).
+          lo_column->set_medium_text( 'Loan Balance' ).
+          lo_column->set_long_text( 'Loan Balance' ).
+
+          lo_column ?= lo_columns->get_column( 'ACCINR' ).
+          lo_column->set_short_text( 'Acc.Int' ).
+          lo_column->set_medium_text( 'Accrued Interest' ).
+          lo_column->set_long_text( 'Accrued Interest' ).
+
+          lo_column ?= lo_columns->get_column( 'OPEN_INT' ).
+          lo_column->set_short_text( 'Open Int' ).
+          lo_column->set_medium_text( 'Opening Interest' ).
+          lo_column->set_long_text( 'Opening Interest ' ).
+
+          lo_column ?= lo_columns->get_column( 'TOTAL' ).
+          lo_column->set_short_text( 'Total' ).
+          lo_column->set_medium_text( 'Total Balance' ).
+          lo_column->set_long_text(
+            'Total Balance Including Interest' ).
+
+        CATCH cx_salv_not_found.
+      ENDTRY.
+
+*---------------------------------------------------------------------*
+* DISPLAY ALV
+*---------------------------------------------------------------------*
+
+      gr_alv->display( ).
+
+    CATCH cx_salv_msg.
+
+      MESSAGE 'Error displaying ALV'
+        TYPE 'S' DISPLAY LIKE 'E'.
+
+  ENDTRY.
+
+ENDFORM.
